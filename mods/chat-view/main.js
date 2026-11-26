@@ -111,10 +111,20 @@ export default class ChatView extends View {
     }
   }
 
-  scheduleScroll(target) {
-    // Consumed synchronously during the very next render() so GPUI places the
-    // viewport on the target item in the same frame — no visible jump or animation.
+  scheduleScroll(target, cx) {
+    // Consumed synchronously during the next render() so GPUI places the viewport
+    // in the same frame; for "bottom", verify once after Markdown layout settles
+    // in case wrapped text expanded content_size().
     this.pendingScrollItem = target;
+    if (target === "bottom" && cx) {
+      cx.spawn(async (cx) => {
+        await cx.sleep(60);
+        if (this.isVisible() && this.rowCount > 0 && !this.isNearBottom()) {
+          this.scrollToTarget("bottom");
+          cx.notify();
+        }
+      });
+    }
   }
 
   switchToTui() {
@@ -197,7 +207,7 @@ export default class ChatView extends View {
       }
       this.loading = !hit;
       if (hit && (!p.scroll || p.scroll.from_bottom === 0)) {
-        this.scheduleScroll("bottom");
+        this.scheduleScroll("bottom", cx);
       }
       cx.notify();
     }
@@ -247,11 +257,17 @@ export default class ChatView extends View {
             }
             this.saveCache(term);
             if (syncTui) {
-              const lastIdx = this.items.length - 1;
-              const useAnchor = typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < lastIdx;
-              this.scheduleScroll(useAnchor ? res.anchor : "bottom");
+              // Treat the latest turn (last user/assistant text plus any trailing tools)
+              // as "bottom" so we never snap upward into the middle of the latest turn.
+              let lastTextIdx = -1;
+              for (let i = this.items.length - 1; i >= 0; i--) {
+                if (this.items[i].kind !== "tools") { lastTextIdx = i; break; }
+              }
+              const cutoff = p.scroll ? lastTextIdx : Math.max(0, lastTextIdx - 1);
+              const useAnchor = typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < cutoff;
+              this.scheduleScroll(useAnchor ? res.anchor : "bottom", cx);
             } else if (wasAtBottom && (!res.unchanged || tailChanged)) {
-              this.scheduleScroll("bottom");
+              this.scheduleScroll("bottom", cx);
             }
           }
         }
@@ -274,7 +290,7 @@ export default class ChatView extends View {
       try {
         await this.adapter.send(term, text);
         this.input.set_value("");
-        this.scheduleScroll("bottom");
+        this.scheduleScroll("bottom", cx);
       } catch (e) {
         notify({ title: "Couldn't send message", body: String(e.message ?? e), level: "error" });
       }
