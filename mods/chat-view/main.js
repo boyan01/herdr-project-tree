@@ -157,7 +157,11 @@ export default class ChatView extends View {
 
     const wantTail = p.status === "working" || p.status === "blocked";
     const syncTui = justEntered || switched;
-    const anchor = syncTui ? (p.scroll ?? { from_bottom: 0, len: 0 }) : null;
+    // Only match the TUI viewport when the user actually scrolled up in scrollback
+    // (or in alt-screen where scroll is null). At from_bottom === 0, always go to bottom.
+    const anchor = syncTui && (!p.scroll || p.scroll.from_bottom > 0)
+      ? (p.scroll ?? { from_bottom: 0, len: 0 })
+      : null;
     const wasAtBottom = this.isNearBottom();
     const prevTail = this.tail;
     const sinceSig = force || switched ? "" : this.sig;
@@ -181,7 +185,9 @@ export default class ChatView extends View {
               this.truncated = res.truncated ?? 0;
             }
             if (syncTui) {
-              this.scheduleScroll(typeof res.anchor === "number" ? res.anchor : "bottom");
+              const lastIdx = this.items.length - 1;
+              const useAnchor = typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < lastIdx;
+              this.scheduleScroll(useAnchor ? res.anchor : "bottom");
             } else if (wasAtBottom && (!res.unchanged || tailChanged)) {
               this.scheduleScroll("bottom");
             }
