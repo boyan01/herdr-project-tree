@@ -452,7 +452,6 @@ export default class ChatView extends View {
     const blocked = pane?.status === "blocked";
     const hasText = Boolean(this.input.value().trim());
     const canSend = hasText && !this.sending && Boolean(pane?.terminal);
-    const showLatest = this.items.length > 0 && !this.isNearBottom();
 
     return v_flex()
       .id("composer-wrap")
@@ -462,32 +461,6 @@ export default class ChatView extends View {
       .pt(6)
       .pb(14)
       .bg(t.background)
-      .when(showLatest, (el) =>
-        el.child(
-          h_flex()
-            .w_full()
-            .justify_center()
-            .pb(8)
-            .child(
-              h_flex()
-                .id("jump-latest")
-                .h(24)
-                .px(10)
-                .gap(5)
-                .items_center()
-                .rounded(12)
-                .cursor_pointer()
-                .bg(t.raised)
-                .border_1()
-                .border_color(t.border)
-                .text_size(11.5)
-                .text_color(t.muted)
-                .hover((s) => s.bg(t.hover).text_color(t.foreground))
-                .on_click((_e, cx) => { this.scrollToTarget("bottom"); cx.notify(); })
-                .child("↓ Latest")
-            )
-        )
-      )
       .when(blocked, (el) => el.child(this.renderBlockedBanner(t)))
       .child(
         v_flex()
@@ -734,6 +707,7 @@ export default class ChatView extends View {
     // Bottom breathing spacer so `scroll_to_item(last)` reveals the final reply cleanly.
     rows.push(div().id("row-end-spacer").h(12).w_full());
     this.rowCount = rows.length;
+    const showLatest = this.items.length > 0 && !this.isNearBottom();
 
     return v_flex()
       .size_full()
@@ -744,14 +718,43 @@ export default class ChatView extends View {
       .border_1()
       .border_color(t.border)
       .child(
-        v_flex()
-          .id("chat-scroll")
+        div()
+          .relative()
           .flex_1()
           .min_h(0)
-          .overflow_y_scrollbar()
-          .track_scroll(this.scroll)
-          .mode("always")
-          .children(rows)
+          .w_full()
+          .child(
+            v_flex()
+              .id("chat-scroll")
+              .size_full()
+              .overflow_y_scrollbar()
+              .track_scroll(this.scroll)
+              .mode("always")
+              .children(rows)
+          )
+          .when(showLatest, (el) =>
+            el.child(
+              h_flex()
+                .id("jump-latest")
+                .absolute()
+                .bottom(10)
+                .right(20)
+                .h(26)
+                .px(10)
+                .gap(4)
+                .items_center()
+                .rounded(13)
+                .cursor_pointer()
+                .bg(t.raised)
+                .border_1()
+                .border_color(t.border)
+                .text_size(11.5)
+                .text_color(t.muted)
+                .hover((s) => s.bg(t.hover).text_color(t.foreground))
+                .on_click((_e, cx) => { this.scrollToTarget("bottom"); cx.notify(); })
+                .child("↓ Latest")
+            )
+          )
       )
       .child(this.renderComposer(t, p));
   }
