@@ -238,11 +238,10 @@ export default class ChatView extends View {
 
     const wantTail = p.status === "working" || p.status === "blocked";
     const syncTui = justEntered || switched;
-    // Only match the TUI viewport when the user actually scrolled up in scrollback
-    // (or in alt-screen where scroll is null). At from_bottom === 0, always go to bottom.
-    const anchor = syncTui && (!p.scroll || p.scroll.from_bottom > 0)
-      ? (p.scroll ?? { from_bottom: 0, len: 0 })
-      : null;
+    // Only sync a historical TUI viewport position when Herdr explicitly reports
+    // scrollback (`from_bottom > 0`). On alt-screen TUIs like agy (`p.scroll == null`),
+    // we cannot tell scroll position reliably, so always open at the bottom.
+    const anchor = syncTui && p.scroll && p.scroll.from_bottom > 0 ? p.scroll : null;
     const wasAtBottom = this.isNearBottom();
     const prevTail = this.tail;
     const sinceSig = force ? "" : this.sig;
@@ -281,14 +280,11 @@ export default class ChatView extends View {
             }
             this.saveCache(term);
             if (syncTui) {
-              // Treat the latest turn (last user/assistant text plus any trailing tools)
-              // as "bottom" so we never snap upward into the middle of the latest turn.
               let lastTextIdx = -1;
               for (let i = this.items.length - 1; i >= 0; i--) {
                 if (this.items[i].kind !== "tools") { lastTextIdx = i; break; }
               }
-              const cutoff = p.scroll ? lastTextIdx : Math.max(0, lastTextIdx - 1);
-              const useAnchor = typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < cutoff;
+              const useAnchor = Boolean(anchor) && typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < lastTextIdx;
               this.scheduleScroll(useAnchor ? res.anchor : "bottom", cx, true);
             } else if (wasAtBottom && (!res.unchanged || tailChanged)) {
               this.scheduleScroll("bottom", cx, false);
