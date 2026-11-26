@@ -1,9 +1,9 @@
 """Structured conversation transcript adapter for Herdr's chat-view mod.
 
-Usage: python3 -I transcript.py <terminal> [since_sig] [--tail]
+Usage: python3 -I transcript.py <terminal> [since_sig] [--tail] [--anchor <from_bottom> <rows>]
 Prints JSON:
-  {agent, sig, items: [{id, role, kind, ...}], truncated, tail?}
-  or {unchanged: true, sig, tail?} when the session file has not changed
+  {agent, sig, items: [{id, role, kind, ...}], truncated, anchor, tail?}
+  or {unchanged: true, sig, anchor?, tail?} when the session file has not changed
   or {error: "..."} when no agent session is available.
 
 Supports Claude Code, Codex, pi and agy via the shared locator in space-tree/live.py.
@@ -18,6 +18,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "space-tree")))
 from live import foreground, session  # noqa: E402
+from reply import compact, strip_md, viewport  # noqa: E402
 from sessions import text_of  # noqa: E402
 
 MAX_ITEMS = 80
@@ -240,14 +241,57 @@ def file_sig(path):
         return ""
 
 
+def match_anchor(items, screen):
+    """Index of the lowest chat item visible on `screen`, or None when none matches."""
+    s_norm = compact(screen)
+    if not s_norm or not items:
+        return None
+    best = None  # (lowest end offset in s_norm, item index)
+    win = 32
+    for idx, it in enumerate(items):
+        if it["kind"] not in ("markdown", "text"):
+            continue
+        r_norm = compact(strip_md(it.get("text") or ""))
+        if len(r_norm) < 4:
+            continue
+        pos = -1
+        if len(r_norm) < win:
+            p = s_norm.rfind(r_norm)
+            if p != -1:
+                pos = p + len(r_norm)
+        else:
+            for i in range(0, len(r_norm) - win + 1, win // 2):
+                p = s_norm.rfind(r_norm[i : i + win])
+                if p != -1 and p + win > pos:
+                    pos = p + win
+            p = s_norm.rfind(r_norm[-win:])
+            if p != -1 and p + win > pos:
+                pos = p + win
+        if pos != -1 and (best is None or (pos, idx) > best):
+            best = (pos, idx)
+    return best[1] if best else None
+
+
 def main():
-    args = sys.argv[1:]
-    want_tail = "--tail" in args
-    args = [a for a in args if a != "--tail"]
-    if not args:
+    raw = sys.argv[1:]
+    want_tail = False
+    anchor_args = None
+    pos_args = []
+    i = 0
+    while i < len(raw):
+        if raw[i] == "--tail":
+            want_tail = True
+            i += 1
+        elif raw[i] == "--anchor" and i + 2 < len(raw):
+            anchor_args = (int(raw[i + 1]), int(raw[i + 2]))
+            i += 3
+        else:
+            pos_args.append(raw[i])
+            i += 1
+    if not pos_args:
         return {"error": "Missing terminal address"}
-    address = args[0]
-    since_sig = args[1] if len(args) > 1 else ""
+    address = pos_args[0]
+    since_sig = pos_args[1] if len(pos_args) > 1 else ""
     agent, path = session(foreground(address))
     if not agent:
         return {"error": "No agent running in this terminal"}
@@ -257,19 +301,27 @@ def main():
             "sig": "",
             "items": [],
             "truncated": 0,
+            "anchor": None,
             "tail": screen_tail(address) if want_tail else "",
         }
     sig = file_sig(path)
     tail = screen_tail(address) if want_tail else ""
-    if since_sig and sig == since_sig:
+    if since_sig and sig == since_sig and anchor_args is None:
         return {"agent": agent, "unchanged": True, "sig": sig, "tail": tail}
     events = PARSERS[agent](path)
     items, truncated = build_items(events)
+    anchor = None
+    if anchor_args is not None:
+        fb, rows = anchor_args
+        anchor = match_anchor(items, viewport(address, fb, rows))
+    if since_sig and sig == since_sig:
+        return {"agent": agent, "unchanged": True, "sig": sig, "anchor": anchor, "tail": tail}
     return {
         "agent": agent,
         "sig": sig,
         "items": items,
         "truncated": truncated,
+        "anchor": anchor,
         "tail": tail,
     }
 

@@ -167,6 +167,23 @@ class TranscriptParserTests(unittest.TestCase):
         self.assertEqual(reply.pick_visible(runs, screen), 1)
         self.assertIsNone(reply.pick_visible(runs, "unrelated compiler output only"))
 
+    def test_transcript_match_anchor_syncs_with_tui_viewport(self):
+        items = [
+            {"id": "m-0", "role": "user", "kind": "text", "text": "Please inspect the memory usage in the worker pool."},
+            {"id": "m-1", "role": "assistant", "kind": "tools", "tools": [{"name": "read_file", "summary": "worker.go"}]},
+            {"id": "m-2", "role": "assistant", "kind": "markdown", "text": "Found a goroutine leak when retries exceed the timeout limit."},
+            {"id": "m-3", "role": "assistant", "kind": "markdown", "text": "Applied the fix and verified with the benchmark suite."},
+        ]
+        self.assertEqual(
+            transcript.match_anchor(items, "Found a goroutine leak when retries exceed the timeout limit."),
+            2,
+        )
+        self.assertEqual(
+            transcript.match_anchor(items, "Please inspect the memory usage in the worker pool."),
+            0,
+        )
+        self.assertIsNone(transcript.match_anchor(items, "only unrelated build logs"))
+
 
 if __name__ == "__main__":
     unittest.main()

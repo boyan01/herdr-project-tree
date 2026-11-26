@@ -1,13 +1,14 @@
 // Native GPUI chat view for running coding agents (Claude Code, Codex, pi, agy).
-// Shares the `main-stack` with the real terminal pane so switching TUI <-> GUI keeps
-// the underlying process alive. Consumes the unified adapter contract from ./adapter.js.
+// Shares `main-stack` with the real terminal pane so switching TUI <-> GUI keeps
+// the underlying process alive and syncs scroll position from the TUI viewport.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, ScrollHandle } from "gpui-base";
 import { spaces, panes, focused, run, theme, layout, window, checking, notify } from "herdr";
 import { createTranscriptAdapter } from "./adapter.js";
 
 const POLL_MS = 1200;
+const MAX_W = 760;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -38,13 +39,15 @@ function toolSummary(tools) {
   }
   const shown = names.slice(0, 3).join(", ");
   const extra = names.length > 3 ? ` +${names.length - 3}` : "";
-  const count = tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`;
+  const count = tools.length === 1 ? "1 tool" : `${tools.length} tools`;
   return shown ? `${count} · ${shown}${extra}` : count;
 }
 
 export default class ChatView extends View {
   init(_props, cx) {
     this.adapter = createTranscriptAdapter();
+    this.scroll = ScrollHandle.new();
+    this.wasVisible = false;
     this.terminal = null;
     this.agent = null;
     this.sig = "";
@@ -58,9 +61,12 @@ export default class ChatView extends View {
     this.expanded = new Set();
     this.hoveredMsg = null;
     this.copiedId = null;
+    this.pendingScrollItem = null; // item index in `this.items`, or "bottom"
+    this.rowCount = 0;
+    this.itemRowOffset = 0;
 
-    this.input = TextareaState.new({ placeholder: "Message agent… (⌘Enter to send)", rows: 2 });
-    this.input.set_auto_grow(2, 6);
+    this.input = TextareaState.new({ placeholder: "Message agent…", rows: 1 });
+    this.input.set_auto_grow(1, 5);
     this.input.set_soft_wrap(true);
     this.input.on("change", (_e, cx) => cx.notify());
     this.input.on("submit", (_e, cx) => this.send(cx));
@@ -72,8 +78,43 @@ export default class ChatView extends View {
 
   isVisible() {
     if (window()?.visible === false) return false;
-    const stack = find(layout(), "main-stack");
-    return stack?.active === "main-chat";
+    return find(layout(), "main-stack")?.active === "main-chat";
+  }
+
+  isNearBottom() {
+    try {
+      const vp = this.scroll.viewport_size();
+      const cs = this.scroll.content_size();
+      const off = this.scroll.offset();
+      if (!cs.height || !vp.height) return true;
+      return off.y + vp.height >= cs.height - 48;
+    } catch {
+      return true;
+    }
+  }
+
+  scrollToTarget(target) {
+    const count = this.rowCount;
+    if (!count) return;
+    if (target === "bottom") {
+      this.scroll.scroll_to_item(count - 1);
+    } else if (typeof target === "number" && target >= 0) {
+      const rowIdx = Math.min(count - 1, this.itemRowOffset + target);
+      this.scroll.scroll_to_item(rowIdx);
+    }
+  }
+
+  scheduleScroll(target, cx) {
+    this.pendingScrollItem = target;
+    cx.spawn(async (cx) => {
+      await cx.sleep(30);
+      if (this.pendingScrollItem !== null) {
+        const t = this.pendingScrollItem;
+        this.pendingScrollItem = null;
+        this.scrollToTarget(t);
+        cx.notify();
+      }
+    });
   }
 
   switchToTui() {
@@ -82,7 +123,11 @@ export default class ChatView extends View {
   }
 
   poll(cx, force = false) {
-    if (this.busy || !this.isVisible()) return;
+    const visible = this.isVisible();
+    const justEntered = visible && !this.wasVisible;
+    this.wasVisible = visible;
+    if (!visible || this.busy) return;
+
     const p = activePane();
     const term = p?.terminal ?? null;
     if (!term || !p?.program?.agent) {
@@ -114,11 +159,16 @@ export default class ChatView extends View {
     }
 
     const wantTail = p.status === "working" || p.status === "blocked";
+    const syncTui = justEntered || switched;
+    const anchor = syncTui ? (p.scroll ?? { from_bottom: 0, len: 0 }) : null;
+    const wasAtBottom = this.isNearBottom();
+    const prevCount = this.items.length;
     const sinceSig = force || switched ? "" : this.sig;
+
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const res = await this.adapter.poll(term, sinceSig, wantTail);
+        const res = await this.adapter.poll(term, { sinceSig, wantTail, anchor });
         if (term === this.terminal) {
           if (res.error) {
             this.error = res.error;
@@ -130,6 +180,11 @@ export default class ChatView extends View {
               this.sig = res.sig ?? "";
               this.items = res.items ?? [];
               this.truncated = res.truncated ?? 0;
+            }
+            if (syncTui) {
+              this.scheduleScroll(typeof res.anchor === "number" ? res.anchor : "bottom", cx);
+            } else if (!res.unchanged && this.items.length > prevCount && wasAtBottom) {
+              this.scheduleScroll("bottom", cx);
             }
           }
         }
@@ -152,6 +207,7 @@ export default class ChatView extends View {
       try {
         await this.adapter.send(term, text);
         this.input.set_value("");
+        this.scheduleScroll("bottom", cx);
       } catch (e) {
         notify({ title: "Couldn't send message", body: String(e.message ?? e), level: "error" });
       }
@@ -192,7 +248,7 @@ export default class ChatView extends View {
     this.copiedId = id;
     cx.notify();
     cx.spawn(async (cx) => {
-      await cx.sleep(1800);
+      await cx.sleep(1600);
       if (this.copiedId === id) {
         this.copiedId = null;
         cx.notify();
@@ -200,117 +256,130 @@ export default class ChatView extends View {
     });
   }
 
-  renderUser(t, item) {
-    return v_flex()
-      .id(`msg-${item.id}`)
+  wrapRow(id, child, pt = 0, pb = 0) {
+    return div()
+      .id(id)
       .w_full()
+      .px(24)
+      .pt(pt)
+      .pb(pb)
+      .child(div().w_full().max_w(MAX_W).mx_auto().child(child));
+  }
+
+  renderUser(t, item, isFirst) {
+    const bubble = div()
+      .max_w(600)
       .px(14)
       .py(10)
-      .rounded(8)
+      .rounded(12)
       .bg(t.raised)
-      .border_1()
-      .border_color(t.border)
-      .child(
-        h_flex()
-          .gap(10)
-          .items_start()
-          .child(div().w(2).self_stretch().rounded(1).bg(t.accent).flex_none())
-          .child(div().flex_1().min_w(0).text_size(13.5).text_color(t.foreground).child(item.text))
-      );
+      .text_size(13.5)
+      .text_color(t.foreground)
+      .child(item.text);
+
+    return this.wrapRow(
+      `row-${item.id}`,
+      h_flex().w_full().justify_end().child(bubble),
+      isFirst ? 8 : 22,
+      8
+    );
   }
 
   renderTools(t, item) {
     const open = this.expanded.has(item.id);
-    const header = h_flex()
+    const pill = h_flex()
       .id(`tools-${item.id}`)
-      .h(26)
+      .h(24)
       .px(8)
       .gap(6)
       .items_center()
       .rounded(6)
       .cursor_pointer()
-      .text_size(12)
+      .text_size(11.8)
       .text_color(t.dim)
       .hover((s) => s.bg(t.hover).text_color(t.muted))
       .on_click((_e, cx) => {
         open ? this.expanded.delete(item.id) : this.expanded.add(item.id);
         cx.notify();
       })
-      .child(svg(`mods/workspace-chrome/${open ? "chevron-down" : "chevron-right"}.svg`).size(11).flex_none())
-      .child(div().flex_1().min_w(0).truncate().child(toolSummary(item.tools)));
+      .child(svg(`mods/workspace-chrome/${open ? "chevron-down" : "chevron-right"}.svg`).size(10).flex_none())
+      .child(div().truncate().child(toolSummary(item.tools)));
 
-    if (!open) return header;
-
-    return v_flex()
-      .id(`tools-wrap-${item.id}`)
+    const body = v_flex()
       .w_full()
-      .gap(2)
-      .child(header)
-      .child(
-        v_flex()
-          .ml(12)
-          .pl(10)
-          .py(4)
-          .gap(4)
-          .border_l(1)
-          .border_color(t.border)
-          .children(
-            item.tools.map((tl, idx) =>
-              h_flex()
-                .id(`tl-${item.id}-${idx}`)
-                .gap(8)
-                .items_center()
-                .text_size(11.8)
-                .child(div().flex_none().font_medium().text_color(t.muted).child(tl.name))
-                .when(Boolean(tl.summary), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(tl.summary)))
+      .gap(4)
+      .child(h_flex().child(pill))
+      .when(open, (el) =>
+        el.child(
+          v_flex()
+            .ml(10)
+            .pl(10)
+            .py(4)
+            .gap(4)
+            .border_l(1)
+            .border_color(t.border)
+            .children(
+              item.tools.map((tl, idx) =>
+                h_flex()
+                  .id(`tl-${item.id}-${idx}`)
+                  .gap(8)
+                  .items_center()
+                  .text_size(11.5)
+                  .child(div().flex_none().font_medium().text_color(t.muted).child(tl.name))
+                  .when(Boolean(tl.summary), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(tl.summary)))
+              )
             )
-          )
+        )
       );
+
+    return this.wrapRow(`row-${item.id}`, body, 4, 4);
   }
 
   renderMarkdown(t, item) {
     const copied = this.copiedId === item.id;
     const showCopy = this.hoveredMsg === item.id || copied;
-    return v_flex()
+    const content = div()
       .id(`md-wrap-${item.id}`)
+      .relative()
       .w_full()
-      .gap(4)
       .on_hover((on, cx) => {
         if (on) this.hoveredMsg = item.id;
         else if (this.hoveredMsg === item.id) this.hoveredMsg = null;
         cx.notify();
       })
       .child(
-        h_flex()
-          .h(20)
-          .items_center()
-          .justify_end()
-          .when(showCopy, (el) =>
-            el.child(
-              h_flex()
-                .id(`copy-${item.id}`)
-                .h(20)
-                .px(6)
-                .gap(4)
-                .items_center()
-                .rounded(5)
-                .cursor_pointer()
-                .text_size(11)
-                .text_color(copied ? t.done : t.dim)
-                .hover((s) => s.bg(t.hover).text_color(t.foreground))
-                .on_click((_e, cx) => this.copyItem(item.id, item.text, cx))
-                .child(svg(copied ? "mods/workspace-chrome/check.svg" : "mods/status-bar/copy.svg").size(11))
-                .child(copied ? "Copied" : "Copy")
-            )
-          )
-      )
-      .child(
         div()
           .w_full()
-          .text_size(13.5)
+          .text_size(13.8)
           .text_color(t.foreground)
           .child(TextView.markdown(`md-${item.id}`, item.text).selectable(true))
+      )
+      .when(showCopy, (el) =>
+        el.child(
+          h_flex()
+            .id(`copy-${item.id}`)
+            .absolute()
+            .top(0)
+            .right(0)
+            .h(22)
+            .px(7)
+            .gap(4)
+            .items_center()
+            .rounded(6)
+            .cursor_pointer()
+            .bg(t.raised)
+            .border_1()
+            .border_color(t.border)
+            .text_size(11)
+            .text_color(copied ? t.done : t.muted)
+            .hover((s) => s.bg(t.hover).text_color(t.foreground))
+            .on_click((_e, cx) => this.copyItem(item.id, item.text, cx))
+            .child(svg(copied ? "mods/workspace-chrome/check.svg" : "mods/status-bar/copy.svg").size(11))
+            .child(copied ? "Copied" : "Copy")
+        )
       );
+
+    return this.wrapRow(`row-${item.id}`, content, 8, 8);
   }
 
   renderBlockedBanner(t) {
@@ -318,13 +387,13 @@ export default class ChatView extends View {
       div()
         .id(id)
         .h(24)
-        .px(10)
+        .px(9)
         .flex()
         .items_center()
         .rounded(6)
         .cursor_pointer()
-        .text_size(11.8)
-        .bg(primary ? t.accent : t.raised)
+        .text_size(11.5)
+        .bg(primary ? t.accent : t.background)
         .text_color(primary ? t.accent_foreground : t.foreground)
         .border_1()
         .border_color(primary ? t.accent : t.border)
@@ -335,21 +404,21 @@ export default class ChatView extends View {
     return v_flex()
       .id("blocked-banner")
       .w_full()
-      .max_w(820)
+      .max_w(MAX_W)
       .mx_auto()
-      .mb(8)
+      .mb(10)
       .p(10)
       .gap(8)
-      .rounded(8)
-      .bg(t.blocked + "18")
+      .rounded(10)
+      .bg(t.blocked + "16")
       .border_1()
-      .border_color(t.blocked + "55")
+      .border_color(t.blocked + "44")
       .child(
         h_flex()
           .gap(8)
           .items_center()
-          .child(div().size(16).rounded(4).bg(t.blocked + "26").flex().items_center().justify_center().text_size(11).font_bold().text_color(t.blocked).child("!"))
-          .child(div().flex_1().text_size(12.5).font_semibold().text_color(t.blocked).child("Agent needs your input"))
+          .child(div().size(16).rounded(4).bg(t.blocked + "26").flex().items_center().justify_center().text_size(10.5).font_bold().text_color(t.blocked).child("!"))
+          .child(div().flex_1().text_size(12.2).font_semibold().text_color(t.blocked).child("Needs approval"))
           .child(quickBtn("blk-tui", "Open in TUI", () => this.switchToTui(), true))
       )
       .when(Boolean(this.tail), (el) =>
@@ -383,23 +452,53 @@ export default class ChatView extends View {
     const blocked = pane?.status === "blocked";
     const hasText = Boolean(this.input.value().trim());
     const canSend = hasText && !this.sending && Boolean(pane?.terminal);
+    const showLatest = this.items.length > 0 && !this.isNearBottom();
 
     return v_flex()
-      .id("composer")
+      .id("composer-wrap")
       .w_full()
       .flex_none()
-      .px(20)
-      .py(12)
-      .bg(t.chrome)
-      .border_t(1)
-      .border_color(t.border)
+      .px(24)
+      .pt(6)
+      .pb(14)
+      .bg(t.background)
+      .when(showLatest, (el) =>
+        el.child(
+          h_flex()
+            .w_full()
+            .justify_center()
+            .pb(8)
+            .child(
+              h_flex()
+                .id("jump-latest")
+                .h(24)
+                .px(10)
+                .gap(5)
+                .items_center()
+                .rounded(12)
+                .cursor_pointer()
+                .bg(t.raised)
+                .border_1()
+                .border_color(t.border)
+                .text_size(11.5)
+                .text_color(t.muted)
+                .hover((s) => s.bg(t.hover).text_color(t.foreground))
+                .on_click((_e, cx) => { this.scrollToTarget("bottom"); cx.notify(); })
+                .child("↓ Latest")
+            )
+        )
+      )
       .when(blocked, (el) => el.child(this.renderBlockedBanner(t)))
       .child(
         v_flex()
+          .id("composer-box")
           .w_full()
-          .max_w(820)
+          .max_w(MAX_W)
           .mx_auto()
-          .gap(8)
+          .rounded(12)
+          .bg(t.raised)
+          .border_1()
+          .border_color(t.border)
           .on_key_down((e, cx) => {
             if (e.key === "enter" && (e.modifiers?.platform || e.modifiers?.control)) {
               this.send(cx);
@@ -408,56 +507,61 @@ export default class ChatView extends View {
           .child(
             Textarea.new(this.input)
               .w_full()
-              .px(12)
-              .py(8)
-              .rounded(8)
-              .bg(t.background)
-              .border_1()
-              .border_color(t.input)
+              .px(14)
+              .pt(10)
+              .pb(4)
+              .bg(t.raised)
               .text_color(t.foreground)
-              .text_size(13)
+              .text_size(13.5)
           )
           .child(
             h_flex()
+              .px(12)
+              .pb(8)
+              .pt(4)
               .items_center()
               .justify_between()
               .text_size(11.5)
               .text_color(t.dim)
               .child(
                 h_flex()
-                  .gap(8)
+                  .gap(6)
                   .items_center()
-                  .child(this.agent ? `${this.agent} · ⌘Enter to send` : "⌘Enter to send")
-                  .child(
-                    div()
-                      .id("composer-tui")
-                      .px(6)
-                      .py(2)
-                      .rounded(4)
-                      .cursor_pointer()
-                      .hover((s) => s.bg(t.hover).text_color(t.foreground))
-                      .on_click(() => this.switchToTui())
-                      .child("Switch to TUI")
-                  )
+                  .child(div().size(6).rounded(3).bg(working ? t.working : blocked ? t.blocked : t.done))
+                  .child(this.agent ? `${this.agent} · ⌘↵` : "⌘↵")
               )
               .child(
                 h_flex()
-                  .gap(8)
+                  .gap(6)
                   .items_center()
+                  .child(
+                    div()
+                      .id("composer-tui")
+                      .h(24)
+                      .px(8)
+                      .flex()
+                      .items_center()
+                      .rounded(6)
+                      .cursor_pointer()
+                      .text_color(t.dim)
+                      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+                      .on_click(() => this.switchToTui())
+                      .child("TUI")
+                  )
                   .when(working, (el) =>
                     el.child(
                       div()
                         .id("composer-stop")
-                        .h(26)
-                        .px(10)
+                        .h(24)
+                        .px(9)
                         .flex()
                         .items_center()
                         .rounded(6)
                         .cursor_pointer()
-                        .bg(t.raised)
+                        .bg(t.background)
                         .border_1()
                         .border_color(t.border)
-                        .text_size(12)
+                        .text_size(11.8)
                         .text_color(t.blocked)
                         .hover((s) => s.bg(t.hover))
                         .on_click((_e, cx) => this.interrupt(cx))
@@ -467,19 +571,19 @@ export default class ChatView extends View {
                   .child(
                     div()
                       .id("composer-send")
-                      .h(26)
-                      .px(12)
+                      .h(24)
+                      .px(11)
                       .flex()
                       .items_center()
                       .rounded(6)
                       .cursor_pointer()
-                      .bg(canSend ? t.accent : t.raised)
-                      .text_size(12)
+                      .bg(canSend ? t.accent : t.background)
+                      .text_size(11.8)
                       .font_medium()
                       .text_color(canSend ? t.accent_foreground : t.dim)
                       .when(canSend, (el) => el.hover((s) => s.opacity(0.9)))
                       .on_click((_e, cx) => { if (canSend) this.send(cx); })
-                      .child(this.sending ? "Sending…" : "Send")
+                      .child(this.sending ? "…" : "Send")
                   )
               )
           )
@@ -492,6 +596,7 @@ export default class ChatView extends View {
     const isAgent = Boolean(p?.terminal && p?.program?.agent);
 
     if (!isAgent) {
+      this.rowCount = 0;
       return v_flex()
         .size_full()
         .rounded(10)
@@ -502,11 +607,11 @@ export default class ChatView extends View {
         .items_center()
         .justify_center()
         .gap(10)
-        .child(div().text_size(13.5).text_color(t.muted).child("GUI chat view is available for agent terminals"))
+        .child(div().text_size(13).text_color(t.muted).child("Chat view is available for agent terminals"))
         .child(
           div()
             .id("empty-to-tui")
-            .h(28)
+            .h(26)
             .px(12)
             .flex()
             .items_center()
@@ -515,7 +620,7 @@ export default class ChatView extends View {
             .bg(t.raised)
             .border_1()
             .border_color(t.border)
-            .text_size(12.5)
+            .text_size(12)
             .text_color(t.foreground)
             .hover((s) => s.bg(t.hover))
             .on_click(() => this.switchToTui())
@@ -528,54 +633,65 @@ export default class ChatView extends View {
 
     if (this.truncated > 0) {
       rows.push(
-        div()
-          .id("trunc-note")
-          .w_full()
-          .py(4)
-          .text_size(11.5)
-          .text_color(t.dim)
-          .child(`Showing latest ${this.items.length} items (${this.truncated} earlier hidden · switch to TUI for full scrollback)`)
+        this.wrapRow(
+          "row-trunc",
+          div()
+            .text_size(11.5)
+            .text_color(t.dim)
+            .child(`Showing latest ${this.items.length} items (${this.truncated} earlier hidden · switch to TUI for full scrollback)`),
+          14,
+          4
+        )
       );
     }
 
+    this.itemRowOffset = rows.length;
+
     if (this.error) {
       rows.push(
-        div()
-          .id("chat-error")
-          .w_full()
-          .p(10)
-          .rounded(8)
-          .bg(t.blocked + "18")
-          .border_1()
-          .border_color(t.blocked + "44")
-          .text_size(12.5)
-          .text_color(t.blocked)
-          .child(`Couldn't load transcript: ${this.error}`)
+        this.wrapRow(
+          "row-error",
+          div()
+            .p(10)
+            .rounded(8)
+            .bg(t.blocked + "16")
+            .border_1()
+            .border_color(t.blocked + "44")
+            .text_size(12.5)
+            .text_color(t.blocked)
+            .child(`Couldn't load transcript: ${this.error}`),
+          14,
+          8
+        )
       );
     } else if (this.loading && !this.items.length) {
       rows.push(
-        h_flex()
-          .id("chat-loading")
-          .gap(8)
-          .py(20)
-          .items_center()
-          .text_size(12.5)
-          .text_color(t.dim)
-          .child(svg("mods/workspace-chrome/spinner.svg").size(13).text_color(t.muted).spin(900))
-          .child("Loading conversation…")
+        this.wrapRow(
+          "row-loading",
+          h_flex()
+            .gap(8)
+            .items_center()
+            .text_size(12.5)
+            .text_color(t.dim)
+            .child(svg("mods/workspace-chrome/spinner.svg").size(13).text_color(t.muted).spin(900))
+            .child("Loading conversation…"),
+          24,
+          8
+        )
       );
     } else if (!this.items.length) {
       rows.push(
-        div()
-          .id("chat-empty")
-          .py(24)
-          .text_size(13)
-          .text_color(t.dim)
-          .child("No messages yet. Send a prompt below to start.")
+        this.wrapRow(
+          "row-empty",
+          div().text_size(13).text_color(t.dim).child("No messages yet. Send a prompt below to start."),
+          24,
+          8
+        )
       );
     } else {
-      for (const item of this.items) {
-        if (item.role === "user") rows.push(this.renderUser(t, item));
+      for (let i = 0; i < this.items.length; i++) {
+        const item = this.items[i];
+        if (item.role === "user") rows.push(this.renderUser(t, item, i === 0));
         else if (item.kind === "tools") rows.push(this.renderTools(t, item));
         else if (item.kind === "markdown") rows.push(this.renderMarkdown(t, item));
       }
@@ -583,37 +699,41 @@ export default class ChatView extends View {
 
     if (working) {
       rows.push(
-        v_flex()
-          .id("working-indicator")
-          .w_full()
-          .pt(6)
-          .gap(6)
-          .child(
-            h_flex()
-              .gap(8)
-              .items_center()
-              .text_size(12)
-              .text_color(t.muted)
-              .child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900))
-              .child("Working…")
-          )
-          .when(Boolean(this.tail), (el) =>
-            el.child(
-              div()
-                .w_full()
-                .px(10)
-                .py(6)
-                .rounded(6)
-                .bg(t.raised)
-                .border_1()
-                .border_color(t.border)
-                .text_size(11.5)
-                .text_color(t.dim)
-                .child(this.tail)
+        this.wrapRow(
+          "row-working",
+          v_flex()
+            .gap(6)
+            .child(
+              h_flex()
+                .gap(8)
+                .items_center()
+                .text_size(12)
+                .text_color(t.muted)
+                .child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900))
+                .child("Working…")
             )
-          )
+            .when(Boolean(this.tail), (el) =>
+              el.child(
+                div()
+                  .w_full()
+                  .px(10)
+                  .py(6)
+                  .rounded(8)
+                  .bg(t.raised)
+                  .text_size(11.5)
+                  .text_color(t.dim)
+                  .child(this.tail)
+              )
+            ),
+          8,
+          12
+        )
       );
     }
+
+    // Bottom breathing spacer so `scroll_to_item(last)` reveals the final reply cleanly.
+    rows.push(div().id("row-end-spacer").h(12).w_full());
+    this.rowCount = rows.length;
 
     return v_flex()
       .size_full()
@@ -629,10 +749,9 @@ export default class ChatView extends View {
           .flex_1()
           .min_h(0)
           .overflow_y_scrollbar()
+          .track_scroll(this.scroll)
           .mode("always")
-          .px(24)
-          .py(18)
-          .child(v_flex().w_full().max_w(820).mx_auto().gap(14).children(rows))
+          .children(rows)
       )
       .child(this.renderComposer(t, p));
   }
