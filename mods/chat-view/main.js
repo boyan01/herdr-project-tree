@@ -8,6 +8,7 @@ import { spaces, panes, focused, run, theme, layout, window, checking, notify } 
 import { createTranscriptAdapter } from "./adapter.js";
 
 const POLL_MS = 1200;
+const SESSION_RECHECK_MS = 15000;
 const MAX_W = 760;
 const PAGE_ITEMS = 30;
 
@@ -48,9 +49,12 @@ export default class ChatView extends View {
   init(_props, cx) {
     this.adapter = createTranscriptAdapter();
     this.scroll = ScrollHandle.new();
+    this.cache = new Map(); // terminal -> { agent, path, pathAt, sig, items, truncated, limit, expanded, draft }
     this.wasVisible = false;
     this.terminal = null;
     this.agent = null;
+    this.path = "";
+    this.pathAt = 0;
     this.sig = "";
     this.items = [];
     this.truncated = 0;
@@ -118,6 +122,36 @@ export default class ChatView extends View {
     run("layout.select", { stack: "main-stack", child: "main" });
   }
 
+  saveCache(term) {
+    if (!term) return;
+    this.cache.set(term, {
+      agent: this.agent,
+      path: this.path,
+      pathAt: this.pathAt,
+      sig: this.sig,
+      items: this.items,
+      truncated: this.truncated,
+      limit: this.limit,
+      expanded: this.expanded,
+      draft: this.input.value(),
+    });
+  }
+
+  loadCache(term) {
+    const c = this.cache.get(term);
+    if (!c) return false;
+    this.agent = c.agent;
+    this.path = c.path;
+    this.pathAt = c.pathAt;
+    this.sig = c.sig;
+    this.items = c.items;
+    this.truncated = c.truncated;
+    this.limit = c.limit;
+    this.expanded = c.expanded;
+    this.input.set_value(c.draft ?? "");
+    return true;
+  }
+
   poll(cx, force = false) {
     const visible = this.isVisible();
     const justEntered = visible && !this.wasVisible;
@@ -128,8 +162,11 @@ export default class ChatView extends View {
     const term = p?.terminal ?? null;
     if (!term || !p?.program?.agent) {
       if (this.terminal !== null || this.items.length) {
+        this.saveCache(this.terminal);
         this.terminal = null;
         this.agent = null;
+        this.path = "";
+        this.pathAt = 0;
         this.sig = "";
         this.items = [];
         this.truncated = 0;
@@ -142,16 +179,26 @@ export default class ChatView extends View {
 
     const switched = term !== this.terminal;
     if (switched) {
+      this.saveCache(this.terminal);
       this.terminal = term;
-      this.agent = null;
-      this.sig = "";
-      this.items = [];
-      this.truncated = 0;
       this.tail = "";
       this.error = null;
-      this.expanded = new Set();
-      this.limit = PAGE_ITEMS;
-      this.loading = true;
+      const hit = this.loadCache(term);
+      if (!hit) {
+        this.agent = null;
+        this.path = "";
+        this.pathAt = 0;
+        this.sig = "";
+        this.items = [];
+        this.truncated = 0;
+        this.expanded = new Set();
+        this.limit = PAGE_ITEMS;
+        this.input.set_value("");
+      }
+      this.loading = !hit;
+      if (hit && (!p.scroll || p.scroll.from_bottom === 0)) {
+        this.scheduleScroll("bottom");
+      }
       cx.notify();
     }
 
@@ -164,18 +211,32 @@ export default class ChatView extends View {
       : null;
     const wasAtBottom = this.isNearBottom();
     const prevTail = this.tail;
-    const sinceSig = force || switched ? "" : this.sig;
+    const sinceSig = force ? "" : this.sig;
+    // Reuse cached session path to skip `hc get` + `lsof`, re-verifying periodically
+    // (or on enter) so `/new` inside the same terminal still switches cleanly.
+    const reuseSession =
+      !force &&
+      !justEntered &&
+      this.agent &&
+      this.path &&
+      Date.now() - this.pathAt < SESSION_RECHECK_MS
+        ? { agent: this.agent, path: this.path }
+        : null;
 
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const res = await this.adapter.poll(term, { sinceSig, wantTail, anchor, limit: this.limit });
+        const res = await this.adapter.poll(term, { sinceSig, wantTail, anchor, limit: this.limit, session: reuseSession });
         if (term === this.terminal) {
           if (res.error) {
             this.error = res.error;
           } else {
             this.error = null;
             this.agent = res.agent ?? this.agent;
+            if (res.path !== undefined) {
+              this.path = res.path;
+              if (!reuseSession) this.pathAt = Date.now();
+            }
             const nextTail = wantTail ? (res.tail ?? "") : "";
             const tailChanged = nextTail !== prevTail;
             this.tail = nextTail;
@@ -184,6 +245,7 @@ export default class ChatView extends View {
               this.items = res.items ?? [];
               this.truncated = res.truncated ?? 0;
             }
+            this.saveCache(term);
             if (syncTui) {
               const lastIdx = this.items.length - 1;
               const useAnchor = typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < lastIdx;

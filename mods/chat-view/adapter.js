@@ -7,12 +7,13 @@ import { exec, hc, appHome } from "herdr";
 
 export function createTranscriptAdapter() {
   return {
-    async poll(terminal, { sinceSig = "", wantTail = false, anchor = null, limit = 30 } = {}) {
+    async poll(terminal, { sinceSig = "", wantTail = false, anchor = null, limit = 30, session = null } = {}) {
       const args = ["-I", `${appHome()}/mods/chat-view/transcript.py`, terminal];
       if (sinceSig) args.push(sinceSig);
       if (wantTail) args.push("--tail");
       if (anchor) args.push("--anchor", String(anchor.from_bottom ?? 0), String(anchor.len ?? 0));
       if (limit) args.push("--limit", String(limit));
+      if (session?.agent && session?.path) args.push("--session", session.agent, session.path);
       const r = await exec("python3", args, { timeout: 10000 });
       if (r.code !== 0) {
         const msg = r.stderr.trim().split("\n").pop() || `exit ${r.code}`;

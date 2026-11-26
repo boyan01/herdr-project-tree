@@ -1,9 +1,9 @@
 """Structured conversation transcript adapter for Herdr's chat-view mod.
 
-Usage: python3 -I transcript.py <terminal> [since_sig] [--tail] [--anchor <from_bottom> <rows>]
+Usage: python3 -I transcript.py <terminal> [since_sig] [--tail] [--anchor <from_bottom> <rows>] [--limit <n>] [--session <agent> <path>]
 Prints JSON:
-  {agent, sig, items: [{id, role, kind, ...}], truncated, anchor, tail?}
-  or {unchanged: true, sig, anchor?, tail?} when the session file has not changed
+  {agent, path, sig, items: [{id, role, kind, ...}], truncated, anchor, tail?}
+  or {unchanged: true, agent, path, sig, anchor?, tail?} when the session file has not changed
   or {error: "..."} when no agent session is available.
 
 Supports Claude Code, Codex, pi and agy via the shared locator in space-tree/live.py.
@@ -277,6 +277,7 @@ def main():
     want_tail = False
     anchor_args = None
     max_items = MAX_ITEMS
+    cached_session = None
     pos_args = []
     i = 0
     while i < len(raw):
@@ -289,6 +290,9 @@ def main():
         elif raw[i] == "--limit" and i + 1 < len(raw):
             max_items = max(10, int(raw[i + 1]))
             i += 2
+        elif raw[i] == "--session" and i + 2 < len(raw):
+            cached_session = (raw[i + 1], raw[i + 2])
+            i += 3
         else:
             pos_args.append(raw[i])
             i += 1
@@ -296,12 +300,16 @@ def main():
         return {"error": "Missing terminal address"}
     address = pos_args[0]
     since_sig = pos_args[1] if len(pos_args) > 1 else ""
-    agent, path = session(foreground(address))
+    if cached_session and cached_session[0] in PARSERS and os.path.isfile(cached_session[1]):
+        agent, path = cached_session
+    else:
+        agent, path = session(foreground(address))
     if not agent:
         return {"error": "No agent running in this terminal"}
     if not path:
         return {
             "agent": agent,
+            "path": "",
             "sig": "",
             "items": [],
             "truncated": 0,
@@ -311,7 +319,7 @@ def main():
     sig = f"{file_sig(path)}:{max_items}"
     tail = screen_tail(address) if want_tail else ""
     if since_sig and sig == since_sig and anchor_args is None:
-        return {"agent": agent, "unchanged": True, "sig": sig, "tail": tail}
+        return {"agent": agent, "path": path, "unchanged": True, "sig": sig, "tail": tail}
     events = PARSERS[agent](path)
     items, truncated = build_items(events, max_items=max_items)
     anchor = None
@@ -319,9 +327,10 @@ def main():
         fb, rows = anchor_args
         anchor = match_anchor(items, viewport(address, fb, rows))
     if since_sig and sig == since_sig:
-        return {"agent": agent, "unchanged": True, "sig": sig, "anchor": anchor, "tail": tail}
+        return {"agent": agent, "path": path, "unchanged": True, "sig": sig, "anchor": anchor, "tail": tail}
     return {
         "agent": agent,
+        "path": path,
         "sig": sig,
         "items": items,
         "truncated": truncated,
