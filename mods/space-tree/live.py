@@ -6,8 +6,8 @@ Prints JSON: {terminal: title}; terminals without a known title are left out.
 Claude Code: the terminal's foreground pid -> ~/.claude/sessions/<pid>.json -> sessionId
 -> that session's latest custom-title / ai-title (else the pid file's own non-derived name).
 pi: `--session <id>` in its argv, else the newest session file in its folder written since
-the process started. agy: the conversations/<id>.db the process holds open -> its title in
-conversation_summaries.db. Codex sets its terminal title to its thread name already.
+the process started. agy: the presence/<id>.lock (or conversations/<id>.db) the process holds
+open -> its title in conversation_summaries.db. Codex sets its terminal title to its thread name already.
 """
 
 import glob
@@ -90,12 +90,15 @@ AGY = os.path.join(HOME, ".gemini/antigravity-cli")
 
 
 def agy_conversation(fg):
-    """The conversation an agy process is on: the conversations/<id>.db it holds open."""
+    """The conversation an agy process is on: the presence/<id>.lock (or conversations/<id>.db) it holds open."""
     try:
         r = subprocess.run(["lsof", "-Fn", "-p", str(fg["pid"])], capture_output=True, text=True, timeout=5)
     except (OSError, KeyError, subprocess.TimeoutExpired):
         return None
-    m = re.search(r"/conversations/([0-9a-f-]{36})\.db$", r.stdout, re.M)
+    m = (
+        re.search(r"/presence/([0-9a-f-]{36})\.lock$", r.stdout, re.M)
+        or re.search(r"/conversations/([0-9a-f-]{36})\.db$", r.stdout, re.M)
+    )
     return m.group(1) if m else arg_after(fg.get("argv") or [], "--conversation")
 
 

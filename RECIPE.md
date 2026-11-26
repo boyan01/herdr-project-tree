@@ -80,7 +80,7 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
   - `live.py <terminal>...`: titles of running sessions. `hc get <t> --json` gives the
     foreground pid and argv. Claude: `~/.claude/sessions/<pid>.json` → session id. pi/Codex:
     the id in argv, else the newest session file written since the process started (`ps -o
-    etime=`). agy: the `conversations/<id>.db` it holds open (`lsof -p`).
+    etime=`). agy: the `presence/<id>.lock` (or `conversations/<id>.db`) it holds open (`lsof -p`).
   - `reply.py <terminal>`: the latest answer, put on the clipboard with `pbcopy`.
 - `mods/top-bar`: a clone of the shipped `tabs` with the tab strip and wheel switching removed
   and the pane info and VS Code button added (`code.svg` is Lucide's code icon); uses the shipped `pane`, `files`, `changes`, `new-menu` art.
