@@ -124,10 +124,27 @@ def agent_of(fg):
     return "claude" if fg.get("name") == "claude" else name if name in ("pi", "codex", "agy") else None
 
 
+def agy_session(fg):
+    cid = agy_conversation(fg)
+    if not cid:
+        return None
+    for name in ("transcript_full.jsonl", "transcript.jsonl"):
+        path = os.path.join(AGY, "brain", cid, ".system_generated/logs", name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def session(fg):
     """(agent, session file) of the agent running as `fg`; (None, None) when unknown."""
     agent = agent_of(fg)
-    path = claude_session(fg)[0] if agent == "claude" else pi_session(fg) if agent == "pi" else codex_session(fg) if agent == "codex" else None
+    path = (
+        claude_session(fg)[0] if agent == "claude"
+        else pi_session(fg) if agent == "pi"
+        else codex_session(fg) if agent == "codex"
+        else agy_session(fg) if agent == "agy"
+        else None
+    )
     return agent, path
 
 

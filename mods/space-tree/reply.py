@@ -146,16 +146,26 @@ def codex_blocks(path):
     return blocks
 
 
+def agy_blocks(path):
+    for o in records(path):
+        t = o.get("type")
+        if t == "PLANNER_RESPONSE":
+            if o.get("content"):
+                yield "text", o.get("content")
+            if o.get("tool_calls"):
+                yield "tool", None
+        elif t == "USER_INPUT":
+            yield "tool", None
+
+
 def main():
     address = sys.argv[1]
     from_bottom = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     rows = int(sys.argv[3]) if len(sys.argv) > 3 else 0
     agent, path = session(foreground(address))
-    if agent == "agy":
-        return {"error": "agy answers can't be read yet"}
     if not path:
         return {"error": "No agent session found in this terminal"}
-    runs = all_runs({"claude": claude_blocks, "pi": pi_blocks, "codex": codex_blocks}[agent](path))
+    runs = all_runs({"claude": claude_blocks, "pi": pi_blocks, "codex": codex_blocks, "agy": agy_blocks}[agent](path))
     if not runs:
         return {"error": "No answer yet"}
     idx = pick_visible(runs, viewport(address, from_bottom, rows))

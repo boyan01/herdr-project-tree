@@ -96,7 +96,7 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
 - pi and Codex sessions started fresh (not resumed) are matched by "newest file in that folder
   since the process started": two of them started in one folder can swap titles or answers.
   Claude Code and agy are matched exactly.
-- Copy reply is macOS only (`pbcopy`) and doesn't support agy, whose conversations are binary.
+- Copy reply is macOS only (`pbcopy`).
 - `status-bar` runs `mods/space-tree/reply.py`: renaming `space-tree` breaks Copy reply.
 - History also lists a session that is running now; resuming it starts a second copy.
 - A space's name follows its first terminal's folder, which can differ from the folder it was
