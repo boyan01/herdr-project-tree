@@ -1,0 +1,18 @@
+# Only the Project Tree layout and its mods are tracked; the rest of this Herdr home is the app's.
+/*
+!/.gitignore
+!/README.md
+!/RECIPE.md
+!/preview.png
+!/layouts/
+/layouts/*
+!/layouts/tree.json
+!/mods/
+/mods/*
+!/mods/space-tree/
+!/mods/status-bar/
+!/mods/top-bar/
+# Written by Herdr.
+*.d.ts
+jsconfig.json
+__pycache__/
