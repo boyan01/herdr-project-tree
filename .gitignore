@@ -9,9 +9,11 @@
 !/layouts/tree.json
 !/mods/
 /mods/*
+!/mods/chat-view/
 !/mods/space-tree/
 !/mods/status-bar/
 !/mods/top-bar/
+!/tests/
 # Written by Herdr.
 *.d.ts
 jsconfig.json

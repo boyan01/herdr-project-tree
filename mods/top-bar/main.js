@@ -95,8 +95,21 @@ export default class TopBar extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
+    const mainStack = find(root, "main-stack");
+    const chatOn = mainStack?.active === "main-chat";
+    const isAgent = Boolean(p?.terminal && p?.program?.agent);
+    if (p?.pane !== this.lastPane) {
+      this.lastPane = p?.pane;
+      if (chatOn && !isAgent) run("layout.select", { stack: "main-stack", child: "main" });
+    }
     const enabled = shared("workspace.panels") ?? ["files", "changes"];
     this.syncPanel(space, panel, body, enabled);
+    const chatButton = () => h_flex().id("toggle-chat").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
+      .text_size(12).bg(chatOn ? t.selected : t.chrome).text_color(chatOn ? t.foreground : t.muted)
+      .hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
+      .tooltip(chatOn ? "Switch to Terminal (TUI)" : "Switch to Chat view (GUI)")
+      .on_click(() => run("layout.select", { stack: "main-stack", child: chatOn ? "main" : "main-chat" }))
+      .child(svg("mods/top-bar/chat.svg").size(14)).child("Chat");
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
       return h_flex().id(`panel-${id}`).h(26).px(8).gap(5).flex_none().items_center().rounded(6)
@@ -118,6 +131,7 @@ export default class TopBar extends View {
           .then(r => r.code === 0 || notify({ title: "Couldn't open VS Code", body: r.stderr.trim(), level: "error" }))
           .catch(e => notify({ title: "Couldn't open VS Code", body: String(e.message ?? e), level: "error" })))
         .child(svg("mods/top-bar/code.svg").size(14)).child("VS Code")))
+      .when(Boolean(mainStack) && (isAgent || chatOn), el => el.child(chatButton()))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/top-bar/win-min.svg").size(16) : "−", () => run("window.minimize")))

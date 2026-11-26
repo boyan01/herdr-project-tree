@@ -32,10 +32,13 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
   (`now`, `5m`, `3h`, `2d`) in 11px `dim`; 15 per page, then "More…".
 - **Top bar** (42px, `chrome`, bottom border): the focused pane's icon, name (medium weight,
   max 260px), folder with `~` for home, status (spinner / "Needs you" chip / done dot). Right:
-  `+` (new-menu popup), "VS Code" (code icon, opens the pane's folder), Files and Changes
-  toggles.
-- **Main**: the active tab's panes, 10px radius, 1px `border`, `accent` when focused, 8px gap;
-  no per-pane header.
+  `+` (new-menu popup), "VS Code" (code icon, opens the pane's folder), "Chat" (toggles between
+  the terminal TUI and native GUI chat view for agent panes), Files and Changes toggles.
+- **Main**: a `stack` (`main-stack`) switching between the active tab's terminal panes (`main`:
+  10px radius, 1px `border`, `accent` when focused, 8px gap; no per-pane header) and `mods/chat-view`
+  (`main-chat`: native GPUI Markdown chat timeline, collapsible tool call summaries, bottom
+  multi-line composer sending via `hc send` / `hc interrupt`, and quick approval actions when
+  `blocked`). The underlying terminal process stays alive across switches.
 - **Status bar** (28px): machine, branch, agent count and how many need you; on the right
   "Copy reply" (when the focused pane runs an agent) and the command palette hint.
 
@@ -88,6 +91,11 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
   and the pane info and VS Code button added (`code.svg` is Lucide's code icon); uses the shipped `pane`, `files`, `changes`, `new-menu` art.
 - `mods/status-bar`: a clone of the shipped `workspace-status` plus the Copy reply button;
   `copy.svg` is Lucide's copy icon.
+- `mods/chat-view` (new): native GPUI chat view (`TextView.markdown`, `TextareaState`,
+  `cx.write_to_clipboard`) behind a pluggable adapter boundary (`adapter.js` + `transcript.py`)
+  so future streaming backends (e.g. `codex app-server`) can slot in without changing the UI.
+- `tests/test_parsers.py`: sanitized offline unit tests for all four transcript parsers and
+  viewport reply matching (`python3 -m unittest discover -s tests -v`).
 
 ## Watch out
 
