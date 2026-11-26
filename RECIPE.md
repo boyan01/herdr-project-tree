@@ -32,7 +32,8 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
   (`now`, `5m`, `3h`, `2d`) in 11px `dim`; 15 per page, then "More…".
 - **Top bar** (42px, `chrome`, bottom border): the focused pane's icon, name (medium weight,
   max 260px), folder with `~` for home, status (spinner / "Needs you" chip / done dot). Right:
-  `+` (new-menu popup), Files and Changes toggles.
+  `+` (new-menu popup), "VS Code" (code icon, opens the pane's folder), Files and Changes
+  toggles.
 - **Main**: the active tab's panes, 10px radius, 1px `border`, `accent` when focused, 8px gap;
   no per-pane header.
 - **Status bar** (28px): machine, branch, agent count and how many need you; on the right
@@ -57,7 +58,9 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
 - **History** matches sessions to the folders the project's terminals are in now (the space's
   creation folder if it has none), newest first, read again each time it opens.
 - **Top bar**: hovering the pane info shows split right, split down, zoom and close for that
-  pane. Files / Changes open the side panel; its state is remembered per space.
+  pane. "VS Code" runs `open -a "Visual Studio Code" <folder>` (macOS, local spaces only; a
+  failure posts an error toast). Files / Changes open the side panel; its state is
+  remembered per space.
 - **Copy reply** copies the newest run of the agent's answer text (text up to its next tool
   call, so a finished turn's closing answer), reports "Copied N chars" or the error, and resets
   after 2.5s.
@@ -80,7 +83,7 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
     etime=`). agy: the `conversations/<id>.db` it holds open (`lsof -p`).
   - `reply.py <terminal>`: the latest answer, put on the clipboard with `pbcopy`.
 - `mods/top-bar`: a clone of the shipped `tabs` with the tab strip and wheel switching removed
-  and the pane info added; uses the shipped `pane`, `files`, `changes`, `new-menu` art.
+  and the pane info and VS Code button added (`code.svg` is Lucide's code icon); uses the shipped `pane`, `files`, `changes`, `new-menu` art.
 - `mods/status-bar`: a clone of the shipped `workspace-status` plus the Copy reply button;
   `copy.svg` is Lucide's copy icon.
 

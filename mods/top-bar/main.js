@@ -1,10 +1,11 @@
 // Top bar for the `tree` layout (cloned from the shipped `tabs`): no tab strip, the
 // tree in the sidebar switches. Left: the focused pane's program, name, folder and
 // status (what the pane header showed); on hover its split / zoom / close buttons.
-// Right: +, Files and Changes as before, the side panel remembered per space.
+// Right: +, VS Code (opens the pane's folder), Files and Changes as before, the side panel
+// remembered per space.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, focused, run, openOverlay, theme, window, shared, layout, settings, home } from "herdr";
+import { spaces, panes, focused, run, openOverlay, theme, window, shared, layout, settings, home, exec, notify } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -109,6 +110,14 @@ export default class TopBar extends View {
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(info)
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      // A remote space's folder is on another machine: no local editor for it.
+      .when(Boolean(p?.cwd) && !space?.machine && w?.platform === "macos", el => el.child(h_flex().id("open-vscode").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
+        .text_size(12).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
+        .tooltip(`Open ${folder(p.cwd)} in VS Code`)
+        .on_click(() => exec("open", ["-a", "Visual Studio Code", p.cwd])
+          .then(r => r.code === 0 || notify({ title: "Couldn't open VS Code", body: r.stderr.trim(), level: "error" }))
+          .catch(e => notify({ title: "Couldn't open VS Code", body: String(e.message ?? e), level: "error" })))
+        .child(svg("mods/top-bar/code.svg").size(14)).child("VS Code")))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/top-bar/win-min.svg").size(16) : "−", () => run("window.minimize")))
