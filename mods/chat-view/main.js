@@ -285,7 +285,15 @@ export default class ChatView extends View {
                 if (this.items[i].kind !== "tools") { lastTextIdx = i; break; }
               }
               const useAnchor = Boolean(anchor) && typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < lastTextIdx;
-              this.scheduleScroll(useAnchor ? res.anchor : "bottom", cx, true);
+              const target = useAnchor ? res.anchor : "bottom";
+              // Only mask with opacity(0) when we actually need to jump from another position
+              // or newly switched terminal; if we're already at bottom on the same session,
+              // never flash the screen blank.
+              if (target === "bottom" && !switched && this.isNearBottom()) {
+                if (!res.unchanged || tailChanged) this.scheduleScroll("bottom", cx, false);
+              } else {
+                this.scheduleScroll(target, cx, switched || useAnchor || !this.isNearBottom());
+              }
             } else if (wasAtBottom && (!res.unchanged || tailChanged)) {
               this.scheduleScroll("bottom", cx, false);
             }
