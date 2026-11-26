@@ -154,7 +154,7 @@ def agy_blocks(path):
                 yield "text", o.get("content")
             if o.get("tool_calls"):
                 yield "tool", None
-        elif t == "USER_INPUT":
+        else:
             yield "tool", None
 
 
