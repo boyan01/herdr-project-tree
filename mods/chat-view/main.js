@@ -87,7 +87,7 @@ export default class ChatView extends View {
       const cs = this.scroll.content_size();
       const off = this.scroll.offset();
       if (!cs.height || !vp.height) return true;
-      return off.y + vp.height >= cs.height - 48;
+      return off.y + vp.height >= cs.height - 80;
     } catch {
       return true;
     }
@@ -162,7 +162,7 @@ export default class ChatView extends View {
     const syncTui = justEntered || switched;
     const anchor = syncTui ? (p.scroll ?? { from_bottom: 0, len: 0 }) : null;
     const wasAtBottom = this.isNearBottom();
-    const prevCount = this.items.length;
+    const prevTail = this.tail;
     const sinceSig = force || switched ? "" : this.sig;
 
     this.busy = true;
@@ -175,7 +175,9 @@ export default class ChatView extends View {
           } else {
             this.error = null;
             this.agent = res.agent ?? this.agent;
-            this.tail = wantTail ? (res.tail ?? "") : "";
+            const nextTail = wantTail ? (res.tail ?? "") : "";
+            const tailChanged = nextTail !== prevTail;
+            this.tail = nextTail;
             if (!res.unchanged) {
               this.sig = res.sig ?? "";
               this.items = res.items ?? [];
@@ -183,7 +185,7 @@ export default class ChatView extends View {
             }
             if (syncTui) {
               this.scheduleScroll(typeof res.anchor === "number" ? res.anchor : "bottom", cx);
-            } else if (!res.unchanged && this.items.length > prevCount && wasAtBottom) {
+            } else if (wasAtBottom && (!res.unchanged || tailChanged)) {
               this.scheduleScroll("bottom", cx);
             }
           }
