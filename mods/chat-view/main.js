@@ -9,6 +9,7 @@ import { createTranscriptAdapter } from "./adapter.js";
 
 const POLL_MS = 1200;
 const MAX_W = 760;
+const PAGE_ITEMS = 30;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -64,6 +65,8 @@ export default class ChatView extends View {
     this.pendingScrollItem = null; // item index in `this.items`, or "bottom"
     this.rowCount = 0;
     this.itemRowOffset = 0;
+    this.limit = PAGE_ITEMS;
+    this.immediateScheduled = false;
 
     this.input = TextareaState.new({ placeholder: "Message agent…", rows: 1 });
     this.input.set_auto_grow(1, 5);
@@ -104,17 +107,10 @@ export default class ChatView extends View {
     }
   }
 
-  scheduleScroll(target, cx) {
+  scheduleScroll(target) {
+    // Consumed synchronously during the very next render() so GPUI places the
+    // viewport on the target item in the same frame — no visible jump or animation.
     this.pendingScrollItem = target;
-    cx.spawn(async (cx) => {
-      await cx.sleep(30);
-      if (this.pendingScrollItem !== null) {
-        const t = this.pendingScrollItem;
-        this.pendingScrollItem = null;
-        this.scrollToTarget(t);
-        cx.notify();
-      }
-    });
   }
 
   switchToTui() {
@@ -154,6 +150,7 @@ export default class ChatView extends View {
       this.tail = "";
       this.error = null;
       this.expanded = new Set();
+      this.limit = PAGE_ITEMS;
       this.loading = true;
       cx.notify();
     }
@@ -168,7 +165,7 @@ export default class ChatView extends View {
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const res = await this.adapter.poll(term, { sinceSig, wantTail, anchor });
+        const res = await this.adapter.poll(term, { sinceSig, wantTail, anchor, limit: this.limit });
         if (term === this.terminal) {
           if (res.error) {
             this.error = res.error;
@@ -184,9 +181,9 @@ export default class ChatView extends View {
               this.truncated = res.truncated ?? 0;
             }
             if (syncTui) {
-              this.scheduleScroll(typeof res.anchor === "number" ? res.anchor : "bottom", cx);
+              this.scheduleScroll(typeof res.anchor === "number" ? res.anchor : "bottom");
             } else if (wasAtBottom && (!res.unchanged || tailChanged)) {
-              this.scheduleScroll("bottom", cx);
+              this.scheduleScroll("bottom");
             }
           }
         }
@@ -209,7 +206,7 @@ export default class ChatView extends View {
       try {
         await this.adapter.send(term, text);
         this.input.set_value("");
-        this.scheduleScroll("bottom", cx);
+        this.scheduleScroll("bottom");
       } catch (e) {
         notify({ title: "Couldn't send message", body: String(e.message ?? e), level: "error" });
       }
@@ -565,10 +562,20 @@ export default class ChatView extends View {
       );
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     const p = activePane();
     const isAgent = Boolean(p?.terminal && p?.program?.agent);
+
+    // Trigger an immediate poll when switching into Chat or switching agent tabs,
+    // instead of waiting for the next 1.2s timer tick.
+    if (!checking() && isAgent && this.isVisible() && (!this.wasVisible || p.terminal !== this.terminal) && !this.busy && !this.immediateScheduled) {
+      this.immediateScheduled = true;
+      cx.spawn(async (cx) => {
+        this.immediateScheduled = false;
+        this.poll(cx);
+      });
+    }
 
     if (!isAgent) {
       this.rowCount = 0;
@@ -610,10 +617,28 @@ export default class ChatView extends View {
       rows.push(
         this.wrapRow(
           "row-trunc",
-          div()
-            .text_size(11.5)
-            .text_color(t.dim)
-            .child(`Showing latest ${this.items.length} items (${this.truncated} earlier hidden · switch to TUI for full scrollback)`),
+          h_flex()
+            .justify_center()
+            .child(
+              h_flex()
+                .id("load-earlier")
+                .h(24)
+                .px(10)
+                .items_center()
+                .rounded(12)
+                .cursor_pointer()
+                .bg(t.raised)
+                .border_1()
+                .border_color(t.border)
+                .text_size(11.5)
+                .text_color(t.muted)
+                .hover((s) => s.bg(t.hover).text_color(t.foreground))
+                .on_click((_e, cx) => {
+                  this.limit += PAGE_ITEMS;
+                  this.poll(cx, true);
+                })
+                .child(`Load earlier (${this.truncated} hidden)`)
+            ),
           14,
           4
         )
@@ -709,6 +734,11 @@ export default class ChatView extends View {
     // Bottom breathing spacer so `scroll_to_item(last)` reveals the final reply cleanly.
     rows.push(div().id("row-end-spacer").h(12).w_full());
     this.rowCount = rows.length;
+    if (this.pendingScrollItem !== null) {
+      const target = this.pendingScrollItem;
+      this.pendingScrollItem = null;
+      this.scrollToTarget(target);
+    }
     const showLatest = this.items.length > 0 && !this.isNearBottom();
 
     return v_flex()

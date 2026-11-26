@@ -21,7 +21,7 @@ from live import foreground, session  # noqa: E402
 from reply import compact, strip_md, viewport  # noqa: E402
 from sessions import text_of  # noqa: E402
 
-MAX_ITEMS = 80
+MAX_ITEMS = 30
 
 
 def records(path):
@@ -276,6 +276,7 @@ def main():
     raw = sys.argv[1:]
     want_tail = False
     anchor_args = None
+    max_items = MAX_ITEMS
     pos_args = []
     i = 0
     while i < len(raw):
@@ -285,6 +286,9 @@ def main():
         elif raw[i] == "--anchor" and i + 2 < len(raw):
             anchor_args = (int(raw[i + 1]), int(raw[i + 2]))
             i += 3
+        elif raw[i] == "--limit" and i + 1 < len(raw):
+            max_items = max(10, int(raw[i + 1]))
+            i += 2
         else:
             pos_args.append(raw[i])
             i += 1
@@ -304,12 +308,12 @@ def main():
             "anchor": None,
             "tail": screen_tail(address) if want_tail else "",
         }
-    sig = file_sig(path)
+    sig = f"{file_sig(path)}:{max_items}"
     tail = screen_tail(address) if want_tail else ""
     if since_sig and sig == since_sig and anchor_args is None:
         return {"agent": agent, "unchanged": True, "sig": sig, "tail": tail}
     events = PARSERS[agent](path)
-    items, truncated = build_items(events)
+    items, truncated = build_items(events, max_items=max_items)
     anchor = None
     if anchor_args is not None:
         fb, rows = anchor_args
