@@ -362,6 +362,7 @@ export default class ChatView extends View {
   wrapRow(id, child, pt = 0, pb = 0) {
     return div()
       .id(id)
+      .flex_none()
       .w_full()
       .px(24)
       .pt(pt)
@@ -836,7 +837,7 @@ export default class ChatView extends View {
     }
 
     // Bottom breathing spacer so `scroll_to_item(last)` reveals the final reply cleanly.
-    rows.push(div().id("row-end-spacer").h(12).w_full());
+    rows.push(div().id("row-end-spacer").flex_none().h(12).w_full());
     this.rowCount = rows.length;
     if (this.pendingScrollItem !== null) {
       const target = this.pendingScrollItem;
