@@ -67,6 +67,8 @@ export default class ChatView extends View {
     this.hoveredMsg = null;
     this.copiedId = null;
     this.pendingScrollItem = null; // item index in `this.items`, or "bottom"
+    this.hidingScroll = false;
+    this.scrollGen = 0;
     this.rowCount = 0;
     this.itemRowOffset = 0;
     this.limit = PAGE_ITEMS;
@@ -111,20 +113,42 @@ export default class ChatView extends View {
     }
   }
 
-  scheduleScroll(target, cx) {
-    // Consumed synchronously during the next render() so GPUI places the viewport
-    // in the same frame; for "bottom", verify once after Markdown layout settles
-    // in case wrapped text expanded content_size().
+  scheduleScroll(target, cx, hideDuringSettle = false) {
+    // Request the scroll in the current frame, then verify across a few short ticks
+    // until Markdown wrapping finishes expanding `content_size()`. When opening or
+    // switching chats, keep the list hidden for those ~1-2 frames so it appears
+    // directly at the final position with no jump or scroll animation.
     this.pendingScrollItem = target;
-    if (target === "bottom" && cx) {
-      cx.spawn(async (cx) => {
-        await cx.sleep(60);
-        if (this.isVisible() && this.rowCount > 0 && !this.isNearBottom()) {
-          this.scrollToTarget("bottom");
+    if (hideDuringSettle) this.hidingScroll = true;
+    const gen = ++this.scrollGen;
+    if (!cx) return;
+    cx.spawn(async (cx) => {
+      let stable = 0;
+      let prevH = -1;
+      for (let step = 0; step < 8; step++) {
+        await cx.sleep(24);
+        if (gen !== this.scrollGen || !this.isVisible()) return;
+        let h = 0;
+        try { h = this.scroll.content_size().height; } catch {}
+        const needMore =
+          target === "bottom"
+            ? (this.rowCount > 0 && !this.isNearBottom())
+            : step === 0;
+        if (needMore || (h > 0 && h !== prevH)) {
+          this.scrollToTarget(target);
           cx.notify();
+          stable = 0;
+        } else if (h > 0) {
+          stable += 1;
+          if (stable >= 2) break;
         }
-      });
-    }
+        prevH = h;
+      }
+      if (gen === this.scrollGen && this.hidingScroll) {
+        this.hidingScroll = false;
+        cx.notify();
+      }
+    });
   }
 
   switchToTui() {
@@ -207,7 +231,7 @@ export default class ChatView extends View {
       }
       this.loading = !hit;
       if (hit && (!p.scroll || p.scroll.from_bottom === 0)) {
-        this.scheduleScroll("bottom", cx);
+        this.scheduleScroll("bottom", cx, true);
       }
       cx.notify();
     }
@@ -265,9 +289,9 @@ export default class ChatView extends View {
               }
               const cutoff = p.scroll ? lastTextIdx : Math.max(0, lastTextIdx - 1);
               const useAnchor = typeof res.anchor === "number" && res.anchor >= 0 && res.anchor < cutoff;
-              this.scheduleScroll(useAnchor ? res.anchor : "bottom", cx);
+              this.scheduleScroll(useAnchor ? res.anchor : "bottom", cx, true);
             } else if (wasAtBottom && (!res.unchanged || tailChanged)) {
-              this.scheduleScroll("bottom", cx);
+              this.scheduleScroll("bottom", cx, false);
             }
           }
         }
@@ -823,7 +847,7 @@ export default class ChatView extends View {
       this.pendingScrollItem = null;
       this.scrollToTarget(target);
     }
-    const showLatest = this.items.length > 0 && !this.isNearBottom();
+    const showLatest = !this.hidingScroll && this.items.length > 0 && !this.isNearBottom();
 
     return v_flex()
       .size_full()
@@ -843,6 +867,7 @@ export default class ChatView extends View {
             v_flex()
               .id("chat-scroll")
               .size_full()
+              .when(this.hidingScroll, (el) => el.opacity(0))
               .overflow_y_scrollbar()
               .track_scroll(this.scroll)
               .mode("always")
