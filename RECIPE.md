@@ -61,9 +61,10 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
   pane. "VS Code" runs `open -a "Visual Studio Code" <folder>` (macOS, local spaces only; a
   failure posts an error toast). Files / Changes open the side panel; its state is
   remembered per space.
-- **Copy reply** copies the newest run of the agent's answer text (text up to its next tool
-  call, so a finished turn's closing answer), reports "Copied N chars" or the error, and resets
-  after 2.5s.
+- **Copy reply** matches the terminal's current viewport (`PaneScroll` + `hc read`) against all
+  runs of assistant text in the session and copies the lowest visible reply as raw Markdown
+  (falling back to the latest reply when none is on screen), reports "Copied N chars" (or
+  "Copied latest (N chars)") / the error, and resets after 2.5s.
 - **Narrow sidebar** (< 160px): each project is one 28px initial; click selects the space.
 
 ## Built from
@@ -81,7 +82,8 @@ Left to right: the sidebar (268px, `chrome` background), then the work column.
     foreground pid and argv. Claude: `~/.claude/sessions/<pid>.json` → session id. pi/Codex:
     the id in argv, else the newest session file written since the process started (`ps -o
     etime=`). agy: the `presence/<id>.lock` (or `conversations/<id>.db`) it holds open (`lsof -p`).
-  - `reply.py <terminal>`: the latest answer, put on the clipboard with `pbcopy`.
+  - `reply.py <terminal> [from_bottom [rows]]`: the lowest reply visible in the viewport (or
+    the latest reply as fallback), put on the clipboard with `pbcopy`.
 - `mods/top-bar`: a clone of the shipped `tabs` with the tab strip and wheel switching removed
   and the pane info and VS Code button added (`code.svg` is Lucide's code icon); uses the shipped `pane`, `files`, `changes`, `new-menu` art.
 - `mods/status-bar`: a clone of the shipped `workspace-status` plus the Copy reply button;

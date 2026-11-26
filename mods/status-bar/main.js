@@ -1,24 +1,29 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, theme, run, window, keys, focused, exec, appHome } from "herdr";
+import { spaces, agents, panes, theme, run, window, keys, focused, exec, appHome } from "herdr";
 
-// workspace-status plus "Copy reply": the focused agent's latest answer, as the Markdown it wrote
-// (space-tree/reply.py reads it from the session file and puts it on the clipboard).
+// workspace-status plus "Copy reply": the focused agent's visible (or latest) reply, as the
+// Markdown it wrote (space-tree/reply.py reads it from the session file and puts it on the clipboard).
 export default class StatusBar extends View {
-  copy(terminal, cx) {
+  copy(f, cx) {
     if (this.copying) return;
+    const pane = f.pane ? panes().find((p) => p.pane === f.pane) : panes().find((p) => p.terminal === f.terminal);
+    const args = ["-I", `${appHome()}/mods/space-tree/reply.py`, f.terminal];
+    if (pane?.scroll) args.push(String(pane.scroll.from_bottom), String(pane.scroll.len));
     this.copying = { text: "Copying…" };
     cx.notify();
     cx.spawn(async (cx) => {
       let out;
       try {
-        const r = await exec("python3", ["-I", `${appHome()}/mods/space-tree/reply.py`, terminal], { timeout: 15000 });
+        const r = await exec("python3", args, { timeout: 15000 });
         out = JSON.parse(r.stdout || "{}");
         if (!out.chars && !out.error) out.error = r.stderr.trim().split("\n").pop() || `exit ${r.code}`;
       } catch (e) {
         out = { error: String(e.message ?? e) };
       }
-      this.copying = out.error ? { text: out.error, error: true } : { text: `Copied ${out.chars.toLocaleString()} chars` };
+      this.copying = out.error
+        ? { text: out.error, error: true }
+        : { text: out.fallback ? `Copied latest (${out.chars.toLocaleString()} chars)` : `Copied ${out.chars.toLocaleString()} chars` };
       cx.notify();
       await cx.sleep(2500);
       this.copying = null;
@@ -33,8 +38,8 @@ export default class StatusBar extends View {
     return h_flex().id("copy-reply").gap(6).items_center().px(6).h(20).rounded(5).cursor_pointer()
       .text_color(c?.error ? t.blocked : c ? t.foreground : t.muted)
       .hover((x) => x.bg(t.hover).text_color(t.foreground))
-      .tooltip("Copy this agent's latest answer as Markdown")
-      .on_click((_e, cx) => this.copy(f.terminal, cx))
+      .tooltip("Copy the visible agent reply as Markdown (falls back to latest)")
+      .on_click((_e, cx) => this.copy(f, cx))
       .child(svg(c && !c.error ? "mods/workspace-chrome/check.svg" : "mods/status-bar/copy.svg").size(12))
       .child(c?.text ?? "Copy reply");
   }
